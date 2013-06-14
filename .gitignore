@@ -1,0 +1,11 @@
+# This exception is for CA files
+*.crt
+*.key
+
+# These entries are for generated certs
+certs/*.crt
+certs/*.key
+
+# Python cache
+*.pyc
+*.pyo
