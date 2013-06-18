@@ -87,4 +87,5 @@ def gen_signed_cert(domain,
 
         domain_cert = open(cert_path, "w")
         domain_cert.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
+        print("[*] Generated signed certificate for %s" % (domain))
     return key_path, cert_path
