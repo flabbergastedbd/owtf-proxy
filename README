@@ -6,7 +6,10 @@
 
 Inorder for this module to work, please follow these steps :-
 
-1. Run the following two commands in the directory itself, to create a
+1. Create a .owtf folder in your home directory, add a directory proxy
+   and inside proxy add another directory called certs.
+
+2. Run the following two commands in the ~/.owtf/proxy/ directory itself, to create a
    local Certificate Authority.
 
    Please make sure you use the password "owtf-dev" for key file
@@ -15,4 +18,10 @@ Inorder for this module to work, please follow these steps :-
    
    * openssl req -new -x509 -days 3650 -key ca.key -out ca.crt
 
-2. Add the generated ca.crt to your trusted CAs in your browser
+3. Add the generated ca.crt to your trusted CAs in your browser
+
+So, your directory structure will be like :-
+
+* ~/.owtf/proxy/ca.crt
+* ~/.owtf/proxy/ca.key
+* ~/.owtf/proxy/certs/

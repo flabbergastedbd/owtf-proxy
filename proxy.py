@@ -33,49 +33,67 @@ import tornado.httpserver
 import tornado.ioloop
 import tornado.iostream
 import tornado.web
-import tornado.httpclient
 import tornado.curl_httpclient
 import socket
 import ssl
+import tornado.escape
+import tornado.httputil
 
 from socket_wrapper import wrap_socket
-from timer import Timer
 
-class Profiler(object):
-    total = 0
-#timer = Timer()
 
 class ProxyHandler(tornado.web.RequestHandler):
     """
     This RequestHandler processes all the requests that the application recieves
     """
-    SUPPORTED_METHODS = ['GET', 'POST', 'CONNECT', 'HEAD', 'PUT', 'DELETE', 'OPTIONS']
+    SUPPORTED_METHODS = ['GET', 'POST', 'CONNECT', 'HEAD', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
 
-    #def initialize(self, total):
-    #    self.total = total
+    def set_status(self, status_code, reason=None):
+        """Sets the status code for our response.
+        Overriding is done so as to handle unknown
+        response codes gracefully.
+        """
+        self._status_code = status_code
+        if reason is not None:
+            self._reason = tornado.escape.native_str(reason)
+        else:
+            try:
+                self._reason = tornado.httputil.responses[status_code]
+            except KeyError:
+                self._reason = tornado.escape.native_str("Unknown Error")
 
     @tornado.web.asynchronous
     def get(self):
         """
-        * This function handles all requests except the connect request. 
-        * Once ssl stream is formed between browser and proxy, the requests are 
+        * This function handles all requests except the connect request.
+        * Once ssl stream is formed between browser and proxy, the requests are
           then processed by this function
         """
 
         # Data for handling headers through a streaming callback
-        restricted_headers = ['Content-Length', 'Content-Encoding', 'Etag', 'Transfer-Encoding', 'Connection', 'Vary']
-        
+        restricted_headers = ['Content-Length',
+                            'Content-Encoding',
+                            'Etag',
+                            'Transfer-Encoding',
+                            'Connection',
+                            'Vary',
+                            'Accept-Ranges',
+                            'Pragma']
+
         # This function is a callback after the async client gets the full response
         # This method will be improvised with more headers from original responses
         def handle_response(response):
+
             self.set_status(response.code)
-            for header, value in response.headers.iteritems():
-                if header not in restricted_headers:
-                    self.set_header(header, value)
-                
+            for header, value in list(response.headers.items()):
+                if header == "Set-Cookie":
+                    # print(("%s: %s" % (header, value)))
+                    self.add_header(header, value)
+                else:
+                    if header not in restricted_headers:
+                        self.set_header(header, value)
+            # print("\n\n")
             #self.set_header('Content-Type', response.headers['Content-Type'])
-            #self.total.total += timer.GetElapsedTime()
-            #print(self.total.total)
             self.finish()
 
         # This function is a callback when a small chunk is recieved
@@ -97,12 +115,14 @@ class ProxyHandler(tornado.web.RequestHandler):
                 del self.request.headers[header]
             except:
                 continue
-        #self.request.headers['Connection'] = 'close'
-        # httprequest object is created and then passed to async client
-        # with a callback
-        # async_client = tornado.httpclient.AsyncHTTPClient()
-        #timer.StartTimer()
+
+        # httprequest object is created and then passed to async client with a callback
         # pycurl is needed for curl client
+        #print(url)
+        #print((self.request.headers))
+        #print("\n")
+        #print((self.request.body))
+        #print("\n")
         async_client = tornado.curl_httpclient.CurlAsyncHTTPClient()
         request = tornado.httpclient.HTTPRequest(
                 url=url,
@@ -113,31 +133,33 @@ class ProxyHandler(tornado.web.RequestHandler):
                 use_gzip=True,
                 streaming_callback=handle_data_chunk,
                 header_callback=None,
+                proxy_host=self.application.outbound_ip,
+                proxy_port=self.application.outbound_port,
                 allow_nonstandard_methods=True,
                 validate_cert=False)
 
         try:
             async_client.fetch(request, callback=handle_response)
-        except Exception, e:
+        except Exception as e:
             print(e)
 
     # The following 5 methods can be handled through the above implementation
     @tornado.web.asynchronous
     def post(self):
         return self.get()
-    
+
     @tornado.web.asynchronous
     def head(self):
         return self.get()
-    
+
     @tornado.web.asynchronous
     def put(self):
         return self.get()
-    
+
     @tornado.web.asynchronous
     def delete(self):
         return self.get()
-    
+
     @tornado.web.asynchronous
     def options(self):
         return self.get()
@@ -158,38 +180,62 @@ class ProxyHandler(tornado.web.RequestHandler):
         host, port = self.request.uri.split(':')
 
         def start_tunnel():
-            self.request.connection.stream.write(b"HTTP/1.1 200 OK CONNECTION ESTABLISHED\r\n\r\n")
             try:
+                self.request.connection.stream.write(b"HTTP/1.1 200 OK CONNECTION ESTABLISHED\r\n\r\n")
                 wrap_socket(self.request.connection.stream.socket, host, success=ssl_success)
-            except Exception, e:
-                print(e)
+            except tornado.iostream.StreamClosedError:
+                pass
 
         def ssl_success(client_socket):
             client = tornado.iostream.SSLIOStream(client_socket)
-            http_server.handle_stream(client, "127.0.0.1")
+            server.handle_stream(client, self.application.inbound_ip)  # lint:ok
 
         try:
             s = ssl.wrap_socket(socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0))
             upstream = tornado.iostream.SSLIOStream(s)
             upstream.connect((host, int(port)), start_tunnel)
         except Exception:
-            print("[!] Dropping CONNECT request to " + self.request.uri)
+            print(("[!] Dropping CONNECT request to " + self.request.uri))
             self.write(b"404 Not Found :P")
             self.finish()
 
-if __name__ == '__main__':
-    try:
-        #total = Profiler()
-        app = tornado.web.Application(handlers=[(r".*", ProxyHandler)], debug=False, gzip=True)
-        global http_server  # Easy to add SSLIOStream later in the request handlers
-        http_server = tornado.httpserver.HTTPServer(app)
 
-        http_server.bind(8080)
-        # To run any number of instances
-        http_server.start(0)
-        tornado.ioloop.IOLoop.instance().start()
+class ProxyServer(object):
 
-    except KeyboardInterrupt:
-        #print(total.total)
+    def __init__(self, inbound_ip="127.0.0.1", inbound_port=8008, outbound_ip=None, outbound_port=None):
+
+        self.application = tornado.web.Application(handlers=[(r".*", ProxyHandler)], debug=False, gzip=True)
+        self.application.inbound_ip = inbound_ip
+        self.application.inbound_port = inbound_port
+        self.application.outbound_ip = outbound_ip
+        self.application.outbound_port = outbound_port
+        global server
+        server = tornado.httpserver.HTTPServer(self.application)
+        self.server = server
+
+    # "0" equals the number of cores present in a machine
+    def start(self, instances=0):
+        try:
+            #total = Profiler()
+            #app = tornado.web.Application(handlers=[(r".*", ProxyHandler)], debug=False, gzip=True)
+            #global http_server  # Easy to add SSLIOStream later in the request handlers
+            #http_server = tornado.httpserver.HTTPServer(app)
+            self.server.bind(self.application.inbound_port, address=self.application.inbound_ip)
+
+            # To run any number of instances
+            self.server.start(instances)
+            tornado.ioloop.IOLoop.instance().start()
+
+        except Exception as e:
+            print(e)
+
+    def stop(self):
         tornado.ioloop.IOLoop.instance().stop()
         print("[!] Shutting down the proxy server")
+
+if __name__ == "__main__":
+    try:
+        proxy = ProxyServer()
+        proxy.start()
+    except KeyboardInterrupt:
+        proxy.stop()

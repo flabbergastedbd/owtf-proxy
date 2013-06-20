@@ -43,7 +43,11 @@ def wrap_socket(socket, domain, success=None, failure=None, io=None, **options):
     options.setdefault('ssl_version', ssl.PROTOCOL_SSLv23)
     options.setdefault('server_side', True)
 
-    key, cert = gen_signed_cert(domain)
+    # The idea is to handle domains with greater than 3 dots using wildcard certs
+    if domain.count(".") >= 3:
+        key, cert = gen_signed_cert("*." + ".".join(domain.split(".")[-3:]))
+    else:
+        key, cert = gen_signed_cert(domain)
     options.setdefault('certfile', cert)
     options.setdefault('keyfile', key)
 
